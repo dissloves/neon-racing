@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Neon Circuit</title>
+<style>
+*{box-sizing:border-box;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#07121c;touch-action:none;font-family:system-ui,Arial}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+#hud{position:fixed;inset:0;color:#fff;pointer-events:none}
+.top{display:flex;justify-content:space-between;padding:calc(12px + env(safe-area-inset-top)) 12px 0}
+.panel{padding:9px 12px;border:1px solid #ffffff25;background:#07121bcc;border-radius:13px;backdrop-filter:blur(5px);font-weight:700;text-shadow:0 2px 4px #000}
+#speed{font-size:30px;line-height:1}small{font-size:10px;letter-spacing:2px;color:#a8c5d7}
+#rightpanel{text-align:right;font-size:13px;line-height:1.5}
+#help{position:absolute;top:78px;left:50%;transform:translateX(-50%);white-space:nowrap;background:#06121b99;border-radius:50px;padding:7px 11px;font-size:12px}
+.controls{position:absolute;bottom:calc(16px + env(safe-area-inset-bottom));width:100%;display:flex;justify-content:space-between;padding:0 14px;pointer-events:auto}
+.group{display:flex;gap:9px;align-items:end}
+.btn{width:64px;height:64px;border-radius:17px;border:1px solid #ffffff30;background:#142b43cc;color:white;font-size:22px;font-weight:bold;touch-action:none;outline:none;-webkit-tap-highlight-color:transparent}
+.btn:active,.btn.down{background:#12bde677;transform:scale(.96)}
+.gas{width:76px;height:76px;background:#087a5bcc}.brake{background:#9b343bcc}
+#message{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);padding:22px 26px;text-align:center;border:1px solid #ffffff35;border-radius:18px;background:#06121beF;font-size:20px;font-weight:900;min-width:270px}
+#message button{margin-top:15px;padding:12px 20px;border:0;border-radius:12px;background:#18c7ed;font-weight:900;font-size:16px;pointer-events:auto}
+</style></head><body>
+<canvas id="game"></canvas><div id="hud">
+<div class="top"><div class="panel"><div id="speed">0</div><small>KM/H</small><div style="font-size:11px;margin-top:3px">NEON CIRCUIT</div></div>
+<div class="panel" id="rightpanel"><div id="lap">КРУГ 1 / 3</div><div>⏱ <span id="time">00:00.0</span></div><div>🏆 <span id="best">Лучший: --:--.-</span></div><div>💥 <span id="hits">0</span></div></div></div>
+<div id="help">WASD / стрелки · кнопки для телефона</div>
+<div class="controls"><div class="group"><button class="btn" id="left">◀</button><button class="btn" id="right">▶</button></div><div class="group"><button class="btn brake" id="brake">▼</button><button class="btn gas" id="gas">▲</button></div></div>
+<div id="message"></div></div>
+<script>
+(()=> {
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+let W,H,DPR;function resize(){DPR=Math.min(devicePixelRatio||1,1.7);W=innerWidth;H=innerHeight;canvas.width=W*DPR;canvas.height=H*DPR;ctx.setTransform(DPR,0,0,DPR,0,0)}resize();addEventListener('resize',resize);
+const keys={left:false,right:false,gas:false,brake:false};
+function bind(id,k){const b=document.getElementById(id);const down=e=>{e.preventDefault();keys[k]=true;b.classList.add('down')},up=e=>{e.preventDefault();keys[k]=false;b.classList.remove('down')};b.addEventListener('pointerdown',down);['pointerup','pointercancel','pointerleave'].forEach(t=>b.addEventListener(t,up))}
+Object.keys(keys).forEach(k=>bind(k,k));
+addEventListener('keydown',e=>{let k=e.key.toLowerCase();if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k))e.preventDefault();if(k==='arrowleft'||k==='a')keys.left=true;if(k==='arrowright'||k==='d')keys.right=true;if(k==='arrowup'||k==='w')keys.gas=true;if(k==='arrowdown'||k==='s')keys.brake=true});
+addEventListener('keyup',e=>{let k=e.key.toLowerCase();if(k==='arrowleft'||k==='a')keys.left=false;if(k==='arrowright'||k==='d')keys.right=false;if(k==='arrowup'||k==='w')keys.gas=false;if(k==='arrowdown'||k==='s')keys.brake=false});
+let speed=0,pos=0,playerX=0,steer=0,time=0,lap=1,lapTime=0,best=null,hits=0,finished=false;
+const lapLength=5200;let last=performance.now();
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function fmt(t){let m=Math.floor(t/60),s=t%60;return `${String(m).padStart(2,'0')}:${s.toFixed(1).padStart(4,'0')}`}
+function curveAt(d){return Math.sin(d/700)*.85+Math.sin(d/1500)*.55}
+function segment(d){return curveAt(d+pos)*.42}
+function poly(points,color){ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(points[0][0],points[0][1]);points.slice(1).forEach(p=>ctx.lineTo(p[0],p[1]));ctx.closePath();ctx.fill()}
+function drawCar(){
+ const cx=W/2+playerX*W*.24,cy=H*.83,scale=Math.min(W/430,1.3);
+ ctx.save();ctx.translate(cx,cy);ctx.scale(scale,scale);
+ // shadow
+ ctx.fillStyle='#0007';ctx.beginPath();ctx.ellipse(0,8,49,18,0,0,Math.PI*2);ctx.fill();
+ // tires
+ ctx.fillStyle='#10151a';ctx.fillRect(-43,-27,15,33);ctx.fillRect(28,-27,15,33);ctx.fillRect(-43,20,15,30);ctx.fillRect(28,20,15,30);
+ // body shape
+ poly([[-37,42],[-48,15],[-43,-26],[-31,-45],[-22,-57],[22,-57],[31,-45],[43,-26],[48,15],[37,42]],'#0aa9e6');
+ poly([[-30,-35],[-22,-49],[22,-49],[30,-35],[25,-12],[-25,-12]],'#12384d');
+ poly([[-26,-9],[26,-9],[34,22],[-34,22]],'#12c9fa');
+ poly([[-28,25],[-34,38],[34,38],[28,25]],'#0875a6');
+ ctx.fillStyle='#c9f7ff';ctx.fillRect(-31,32,12,5);ctx.fillRect(19,32,12,5);
+ ctx.fillStyle='#ff3b53';ctx.fillRect(-32,17,10,8);ctx.fillRect(22,17,10,8);
+ ctx.restore();
+}
+function draw(){
+ let sky=ctx.createLinearGradient(0,0,0,H*.55);sky.addColorStop(0,'#6c9fc4');sky.addColorStop(1,'#d3e4ef');ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
+ // sun glow
+ ctx.fillStyle='#fff7d8';ctx.beginPath();ctx.arc(W*.78,H*.17,28,0,Math.PI*2);ctx.fill();
+ // distant ridge
+ ctx.fillStyle='#587a75';ctx.beginPath();ctx.moveTo(0,H*.43);for(let x=0;x<=W;x+=30)ctx.lineTo(x,H*.37+Math.sin(x*.018)*20);ctx.lineTo(W,H*.5);ctx.lineTo(0,H*.5);ctx.fill();
+ ctx.fillStyle='#41804b';ctx.fillRect(0,H*.42,W,H*.58);
+ const horizon=H*.4, roadHalf=W*.45, segs=100;
+ let centers=[],prevX=W/2;
+ for(let i=0;i<=segs;i++){
+   let z=i/segs, depth=z*z, y=horizon+depth*(H-horizon), roadW=roadHalf*depth+W*.035;
+   let d=pos+(1-z)*1500, c=curveAt(d);
+   let center=W/2+c*W*.28*(1-depth)+playerX*W*.12;
+   centers.push({y,center,roadW,d});
+ }
+ for(let i=segs-1;i>=0;i--){
+   let a=centers[i],b=centers[i+1],stripe=Math.floor((a.d+pos)/100)%2;
+   poly([[a.center-a.roadW,a.y],[a.center+a.roadW,a.y],[b.center+b.roadW,b.y],[b.center-b.roadW,b.y]],'#29313a');
+   let edgeW=a.roadW*.08;
+   poly([[a.center-a.roadW-edgeW,a.y],[a.center-a.roadW,a.y],[b.center-b.roadW,b.y],[b.center-b.roadW-edgeW,b.y]],stripe?'#f5f5f5':'#ed4b4b');
+   poly([[a.center+a.roadW,a.y],[a.center+a.roadW+edgeW,a.y],[b.center+b.roadW+edgeW,b.y],[b.center+b.roadW,b.y]],stripe?'#f5f5f5':'#ed4b4b');
+   // dashed center markers
+   if(Math.floor(a.d/75)%2===0)poly([[a.center-2*a.roadW*.012,a.y],[a.center+2*a.roadW*.012,a.y],[b.center+2*b.roadW*.012,b.y],[b.center-2*b.roadW*.012,b.y]],'#e8edf1');
+   // roadside trees and light poles
+   if(i%9===0){for(let side of [-1,1]){let x=a.center+side*(a.roadW+W*.025),size=5+depth*24;ctx.fillStyle='#4c3828';ctx.fillRect(x-size*.12,a.y-size*.55,size*.24,size*.6);ctx.fillStyle=i%18?'#236340':'#347b48';ctx.beginPath();ctx.arc(x,a.y-size*.65,size*.48,0,Math.PI*2);ctx.fill();}}
+ }
+ // occasional obstacles visible as orange blocks in road, collision near
+ for(let i=0;i<7;i++){let od=((i*730+500-pos%lapLength+lapLength)%lapLength);if(od<1300&&od>100){let z=1-od/1500,dep=z*z,idx=clamp(Math.round((1-z)*segs),0,segs),a=centers[idx],x=a.center+(i%2?-.42:.42)*a.roadW;let size=6+dep*26;ctx.fillStyle='#ffb32d';ctx.fillRect(x-size/2,a.y-size,size,size);ctx.fillStyle='#fff3b4';ctx.fillRect(x-size*.35,a.y-size*.75,size*.7,size*.15);}}
+ drawCar();
+}
+function update(dt){
+ if(!finished){time+=dt;lapTime+=dt;}
+ const acc=keys.gas&&!finished?24:0;speed+=acc*dt;speed-=speed*0.018; if(keys.brake)speed-=42*dt;speed=clamp(speed,0,45);
+ let steerInput=(keys.left?1:0)-(keys.right?1:0);steer+=(steerInput-steer)*Math.min(1,dt*5);
+ playerX+=steer*speed*dt*.027;playerX-=curveAt(pos)*speed*dt*.0005;
+ if(Math.abs(playerX)>1.05){playerX=clamp(playerX,-1.05,1.05);speed*=.72;if(Math.random()<dt*2)hits++}
+ pos+=speed*dt*25;
+ if(!finished&&pos>=lap*lapLength){if(best===null||lapTime<best)best=lapTime;lapTime=0;lap++;if(lap>3){finished=true;speed=0;document.getElementById('message').style.display='block';document.getElementById('message').innerHTML=`🏁 ГОНКА ЗАВЕРШЕНА<br><br>Время: ${fmt(time)}<br>Лучший круг: ${fmt(best)}<br>Столкновения: ${hits}<br><button onclick="location.reload()">Ещё раз</button>`;}else document.getElementById('lap').textContent=`КРУГ ${lap} / 3`;}
+ document.getElementById('speed').textContent=Math.round(speed*3.6);document.getElementById('time').textContent=fmt(time);document.getElementById('best').textContent='Лучший: '+(best?fmt(best):'--:--.-');document.getElementById('hits').textContent=hits;
+}
+function frame(now){let dt=Math.min(.04,(now-last)/1000||0);last=now;update(dt);draw();requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+})();
+</script></body></html>
